@@ -1,0 +1,558 @@
+getPartInfo: function(current, parts, source) {
+
+    //START: DFCT0014864 - Empty payload submitting to GNCatalog
+    if (gs.nil(current.getValue('number')) || parts.length == 0) {
+        this.logMessage('Current object or parts is empty.' + 'source : ' + source);
+        return;
+    }
+    //END: DFCT0014864 - Empty payload submitting to GNCatalog
+    try {
+        var partsSelected = parts;
+        var serviceOfferId = current.u_default_service_offer_id.u_service_type_offer_id.toString(); //Added as part of STRY0268955
+        this.current = current;
+        var PartsandServicesforParts = false;
+        var PartsInfoResponse = {};
+        var partsInfoRecords = [];
+        var warrantyStatus = 'OW';
+        var productNumber = '';
+        var modelCategory = '';
+        // STRY0188902:R2 GetPartInfo /HP Order Line transaction staging mapping and Layout	
+        var csrlevel = '';
+        var oversized = '';
+        var overweight = '';
+        var a3 = '';
+        var a4 = '';
+        var hppk = '';
+        var graphics = '';
+        var returnableFlag = '';
+        var dangerousGoods = '';
+        //R2 GetPartInfo /HP Order Line transaction staging mapping and Layout:STRY0188902					
+        grModel = new GlideRecord('cmdb_hardware_product_model');
+        grModel.addQuery('model_number', current.u_product_number.toString());
+        grModel.query();
+        if (grModel.next()) {
+            modelCategory = grModel.getDisplayValue('cmdb_model_category');
+        }
+        var get_line_transactions = new GlideRecord('u_hp_order_line_transaction_staging');
+
+        //STRY0276628 - New story for DFCT0013720 - R2_Send "OW" in GN getinfo request payload whereas order is in warranty
+        if (modelCategory == 'Product') {
+            productNumber = current.u_product_number.toString();
+        } else if (modelCategory == 'Part') {
+            productNumber = '';
+        } //Start - STRY0278254 -New story for DFCT0013756-Product number is not being sent to S5Q
+        else if (modelCategory == '' || modelCategory == 'undefined') {
+
+            var grAsset = new GlideRecord('alm_asset');
+            grAsset.addQuery('sys_id', current.u_asset);
+            grAsset.query();
+            if (grAsset.next()) {
+
+                productNumber = grAsset.model.model_number.toString();
+            }
+        }
+        //End -STRY0278254 -New story for DFCT0013756-Product number is not being sent to S5Q
+        //end STRY0276628 - New story for DFCT0013720 - R2_Send "OW" in GN getinfo request payload whereas order is in warranty
+
+        //Start:STRY0301084-R2 BCP Catalog down
+        if (current.u_bcp_os == true && current.u_order_type.toString() == 'warranty') {
+            warrantyStatus = "IW";
+        }
+        //End:STRY0301084-R2 BCP Catalog down
+        //DFCT0013187 addition of condition - current.u_service_contract != '' && current.u_service_contract.state == 'active'
+        else if ((current.u_warranty_is_active.toString() == 'true' || (current.u_service_contract != '' && current.u_service_contract.state == 'active') || current.u_pending_pop == 'requested') && (current.u_order_type.toString() == 'warranty' || current.u_order_type.toString() == 'FCF Warranty')) {
+            warrantyStatus = "IW";
+            //productNumber = current.u_product_number.toString(); 	//STRY0276628 
+        }
+        /* start STRY0218725:R2 GetPartInfo RECTIFICATION for Stocking and PCF Warranty*/
+        //DFCT0013187 addition of condition -  current.u_service_contract != '' && current.u_service_contract.state == 'active'
+        else if ((current.u_warranty_is_active.toString() == 'true' || (current.u_service_contract != '' && current.u_service_contract.state == 'active') || current.u_pending_pop == 'requested') && current.u_order_type.toString() == 'PCF Warranty') {
+            warrantyStatus = "B";
+            //productNumber = current.u_product_number.toString(); 	//STRY0276628 
+        }
+        /* end STRY0218725:R2 GetPartInfo RECTIFICATION for Stocking and PCF Warranty*/
+        //start Added as part of STRY0221556 : R2 Repair Part Warranty Process Warranty/PCF Warranty
+        else if (current.u_repair_part_warranty != "" && (current.u_order_type.toString() == 'warranty' || current.u_order_type.toString() == 'FCF Warranty')) {
+            warrantyStatus = "IW";
+            //productNumber = current.u_product_number.toString(); 	//STRY0276628 
+        } else if (current.u_repair_part_warranty != "" && current.u_order_type.toString() == 'PCF Warranty') {
+            warrantyStatus = "B";
+            //productNumber = current.u_product_number.toString(); 	//STRY0276628 
+        }
+        //end Added as part of STRY0221556 : R2 Repair Part Warranty Process Warranty/PCF Warranty
+        else if (current.u_warranty_is_active.toString() == 'false' && current.u_order_type.toString() == 'trade') {
+            warrantyStatus = "OW";
+            // productNumber = current.u_product_number.toString(); 	//STRY0276628 
+        } else if (current.u_order_type.toString() == 'stocking' && current.u_future_warranty.toString() == 'true') {
+            warrantyStatus = "B"; //STRY0218725: When Order Type = PCF Warranty or Stocking GetPartInfo request should get Warranty Status = B
+            // productNumber = current.u_product_number.toString();	//STRY0276628 
+        } else if (current.u_order_type.toString() == 'stocking' && current.u_future_warranty.toString() == 'true') {
+            warrantyStatus = "B"; //STRY0218725: When Order Type = PCF Warranty or Stocking GetPartInfo request should get Warranty Status = B
+            // productNumber = '';	//STRY0276628 
+            /*Start - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+            PartsandServicesforParts = true;
+            /*End - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+
+        } else if (current.u_order_type.toString() == 'trade' && current.u_future_warranty.toString() == 'false') {
+            warrantyStatus = "OW";
+            //productNumber = current.u_product_number.toString();	//STRY0276628 
+        } else if (current.u_order_type.toString() == 'trade' && current.u_future_warranty.toString() == 'false') {
+            warrantyStatus = "OW";
+            //productNumber = '';	//STRY0276628 - New story for DFCT0013720 - R2_Send "OW" in GN getinfo request payload whereas order is in warranty
+            /*Start - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+            PartsandServicesforParts = true;
+            /*End - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+        } else if (current.u_order_type.toString() == 'warranty' && current.u_service_advisory_ref != '' && current.u_service_advisory && current.u_warranty_is_active.toString() == 'false') {
+            warrantyStatus = "IW";
+            productNumber = current.u_product_number.toString(); // Defect DFCT0013341 getting trade order instead of warranty.
+        } else if (current.u_order_type.toString() == 'PCF Warranty' && current.u_service_advisory_ref != '' && current.u_service_advisory && current.u_warranty_is_active.toString() == 'false') {
+            warrantyStatus = "B"; //STRY0218205 - R2 Service Advisory Process Warranty/PCF Warranty- Set 'B' for PCF warranty in case of SAA
+            productNumber = current.u_product_number.toString();
+        } else if (current.u_order_type.toString() == 'vmi_iw_claim') { //start STRY0202480,STRY0202478: Warranty status for VMI IW claim
+            warrantyStatus = "IW";
+            productNumber = current.u_product_number.toString();
+        } else if (current.u_order_type.toString() == 'vmi_trade_claim') {
+            warrantyStatus = "OW";
+            productNumber = current.u_product_number.toString(); //end STRY0202480,STRY0202478: Warranty status for VMI Trade claim
+        }
+        //STRY0181736 - Convert the localized product number into product number
+        /*			var indexOfLocalizedNumber = productNumber.indexOf('#');    // Code commented as part of stroy STRY0304630
+                    if (indexOfLocalizedNumber > -1) {
+                        productNumber = productNumber.slice(0, indexOfLocalizedNumber);
+                    }*/
+        var Sessiontk = this.getsessionTk();
+        var tId = this.transId;
+        var apikey = gs.getProperty("apikey.details");
+        var r = new sn_ws.RESTMessageV2('GN Catalog Service', 'getPartinfo');
+        r.setRequestHeader("token", Sessiontk);
+        r.setRequestHeader("Content-Type", "application/json");
+        r.setRequestHeader("x-api-key", apikey);
+
+        var accCRSID = current.account.u_hp_crs_id.toString();
+        var accCRSID1 = accCRSID.split("-");
+
+        var payload = {
+            "TransactionId": tId,
+            "SalesOrg": current.account.u_hp_sales_org.name.toString(),
+            "Country": current.contact.location.u_country.iso3166_2.toString(),
+            "Language": current.account.u_language_code.toString(),
+            "WarrantyStatus": warrantyStatus,
+            "ProductNumber": productNumber,
+            "PartItem": this.partsDetails(partsSelected, serviceOfferId),
+            "CustomerAuthGroup": "SP",
+            "CatalogType": "ASP",
+            //start STRY0187598 - R2 GetPartInfo and GetService request – rectification: Adding CRS ID to getpartinfo request
+            //"CRSID": current.account.u_hp_crs_id.toString(),
+            "CRSID": accCRSID1[0], //DFCT0013545 Enable subaccount in CSDP R2
+            //end STRY0187598 - R2 GetPartInfo and GetService request – rectification: Adding CRS ID to getpartinfo request
+            "ConversionCurrencyCode": current.account.u_currency.toString(),
+            "GetMockResponse": false
+        };
+        var requestCurrencyCode = current.account.u_currency.toString();
+        //gs.info("currency code" + requestCurrencyCode);
+        var parser = new global.JSON();
+        var str = parser.encode(payload);
+        r.setRequestBody(str);
+        this.logMessage(current.number + ' getPartInfo Start Time: ' + gs.nowDateTime()); //STRY0328685-Ability to turn on and Off system logs on demand	            
+        var response = r.execute();
+        var responseBody = response.getBody();
+        this.logMessage(current.number + " getPartInfo request: " + str);
+        this.logMessage(current.number + ' getPartInfo End Time: ' + gs.nowDateTime() + ' getPartInfo response: ' + responseBody);
+        var httpStatus = response.getStatusCode();
+
+        var parsedData = JSON.parse(responseBody);
+        var res = {};
+        var alert = '';
+        res.httpStatus = httpStatus;
+        if (httpStatus == 200) {
+
+            for (var i in parsedData.PartInfoDetail) {
+                var grPartsInfo = new GlideRecord('u_parts_info');
+                grPartsInfo.initialize();
+                grPartsInfo.u_part_number = parsedData.PartInfoDetail[i].PartNumber;
+
+                grPartsInfo.u_part_description = parsedData.PartInfoDetail[i].PartDescription;
+
+                grPartsInfo.u_localized_part_description = parsedData.PartInfoDetail[i].LocalizedPartDescription;
+
+                grPartsInfo.u_long_part_description = parsedData.PartInfoDetail[i].LongPartDescription;
+
+                grPartsInfo.u_long_localized_part_description = parsedData.PartInfoDetail[i].LongLocalizedPartDescription;
+
+                grPartsInfo.u_part_group = parsedData.PartInfoDetail[i].PartGroup;
+
+                grPartsInfo.u_keyword = parsedData.PartInfoDetail[i].Keyword;
+
+                if(parsedData.PartInfoDetail[i].MaterialAlertDetail){
+                for (var l = 0; l < parsedData.PartInfoDetail[i].MaterialAlertDetail.length; l++) {
+                    alert = alert + parsedData.PartInfoDetail[i].MaterialAlertDetail[l].AlertDescription ;
+                    if(i<parsedData.PartInfoDetail.length-1){
+                        alert=alert+"<br>"+ "<br>";
+                    }
+                    grPartsInfo.u_proactive_notification = parsedData.PartInfoDetail[i].MaterialAlertDetail[l].AlertDescription;    
+                }
+                PartsInfoResponse.AlertDescription = alert.toString().trim();
+                }
+                
+
+                var materialPriceFields = new global.CurrencyConversionToUSD().convertCurrencytoUSD(parsedData.PartInfoDetail[i].MaterialPrice, parsedData.ConversionExchangeRate, requestCurrencyCode, parsedData.LocalCurrencyCode);
+
+                grPartsInfo.u_material_price = materialPriceFields.nonUSD_price;
+                //gs.info("material price" + grPartsInfo.u_material_price);
+
+                var laborPriceFields = new global.CurrencyConversionToUSD().convertCurrencytoUSD(parsedData.PartInfoDetail[i].LaborPrice, parsedData.ConversionExchangeRate, requestCurrencyCode, parsedData.LocalCurrencyCode); //corrected the syntax
+                grPartsInfo.u_labor_price = laborPriceFields.nonUSD_price;
+                // gs.info("labor price " + grPartsInfo.u_labor_price);
+
+                var freightPriceFields = new global.CurrencyConversionToUSD().convertCurrencytoUSD(parsedData.PartInfoDetail[i].FreightPrice, parsedData.ConversionExchangeRate, requestCurrencyCode, parsedData.LocalCurrencyCode);
+                //gs.info("Frieight price from  " + freightPriceFields);
+
+                grPartsInfo.u_freight_price = freightPriceFields.nonUSD_price; //DFCT0013213
+                //gs.info("Frieight price " + grPartsInfo.u_freight_price);
+
+                grPartsInfo.u_tax_amount = parsedData.PartInfoDetail[i].TaxAmount;
+
+                grPartsInfo.u_supplies = parsedData.PartInfoDetail[i].Supplies;
+
+                grPartsInfo.u_instantink = parsedData.PartInfoDetail[i].InstantInk;
+
+                grPartsInfo.u_a3 = parsedData.PartInfoDetail[i].A3;
+
+                //grPartsInfo.u_a4 = parsedData.PartInfoDetail[i].A4;
+                grPartsInfo.u_hppk = parsedData.PartInfoDetail[i].HPPK;
+                grPartsInfo.u_a4 = false;
+                grPartsInfo.u_preventative_maintenance = parsedData.PartInfoDetail[i].PreventativeMaintenance;
+                grPartsInfo.u_graphics = parsedData.PartInfoDetail[i].Graphics;
+                grPartsInfo.u_exchange_flag = parsedData.PartInfoDetail[i].ExchangeFlag;
+                grPartsInfo.u_returnable = parsedData.PartInfoDetail[i].Returnable;
+                grPartsInfo.u_complexity_indicator = parsedData.PartInfoDetail[i].ComplexityIndicator;
+                grPartsInfo.u_rohs_compliance_value = parsedData.PartInfoDetail[i].ROHSComplianceValue;
+                grPartsInfo.u_dangerous_goods_indicator = parsedData.PartInfoDetail[i].DangerousGoodsIndicator;
+                grPartsInfo.u_lithium_battery_indicator = parsedData.PartInfoDetail[i].LithiumBatteryIndicator;
+                grPartsInfo.u_oversized_goods_inidcator = parsedData.PartInfoDetail[i].OversizedGoodsInidcator;
+                grPartsInfo.u_heavy_goods_indicator = parsedData.PartInfoDetail[i].HeavyGoodsIndicator;
+                grPartsInfo.u_special_instructions = parsedData.PartInfoDetail[i].SpecialInstructions;
+
+                //*start STRY0218725:R2 GetPartInfo RECTIFICATION for Stocking and PCF Warranty 
+                if (current.u_order_type.toString() == 'PCF Warranty' || current.u_order_type.toString() == 'stocking') {
+                    for (var y in parsedData.PartInfoDetail[i].OrderabilityDetail) {
+                        if (parsedData.PartInfoDetail[i].OrderabilityDetail[y].WarrantyStatus.toString() == "IW") {
+                            grPartsInfo.u_warranty_status = parsedData.PartInfoDetail[i].OrderabilityDetail[y].WarrantyStatus;
+
+                            grPartsInfo.u_orderability = parsedData.PartInfoDetail[i].OrderabilityDetail[y].Orderability;
+                            grPartsInfo.u_restriction_reason = parsedData.PartInfoDetail[i].OrderabilityDetail[y].RestrictionReason;
+                            grPartsInfo.u_product_sensitivity = parsedData.PartInfoDetail[i].OrderabilityDetail[y].ProductSensitivity;
+                            grPartsInfo.u_end_user_csr_exclusion = parsedData.PartInfoDetail[i].OrderabilityDetail[y].EndUserCsrExclusion;
+                        }
+                    }
+                } //*end STRY0218725:R2 GetPartInfo RECTIFICATION for Stocking and PCF Warranty
+                else {
+                    grPartsInfo.u_warranty_status = parsedData.PartInfoDetail[i].OrderabilityDetail[0].WarrantyStatus;
+                    grPartsInfo.u_orderability = parsedData.PartInfoDetail[i].OrderabilityDetail[0].Orderability;
+                    grPartsInfo.u_restriction_reason = parsedData.PartInfoDetail[i].OrderabilityDetail[0].RestrictionReason;
+                    grPartsInfo.u_product_sensitivity = parsedData.PartInfoDetail[i].OrderabilityDetail[0].ProductSensitivity;
+                    grPartsInfo.u_end_user_csr_exclusion = parsedData.PartInfoDetail[i].OrderabilityDetail[0].EndUserCsrExclusion;
+                }
+                grPartsInfo.u_lifecycle_event = parsedData.PartInfoDetail[i].LifecycleEvent;
+                grPartsInfo.u_part_product_line = parsedData.PartInfoDetail[i].PartProductLine;
+                grPartsInfo.u_icm_part_flag = parsedData.PartInfoDetail[i].ICMPartFlag;
+                grPartsInfo.u_discount_eligibility = parsedData.PartInfoDetail[i].DiscountEligibility;
+                grPartsInfo.u_dmr_eligibility = parsedData.PartInfoDetail[i].DmrEligibility;
+                grPartsInfo.u_cdmr_eligibility = parsedData.PartInfoDetail[i].CdmrEligibility;
+                grPartsInfo.u_replacement_part = parsedData.PartInfoDetail[i].ReplacementPart;
+                grPartsInfo.u_replacement_part_detail = parsedData.PartInfoDetail[i].ReplacementPartDetail;
+
+
+                grPartsInfo.u_transaction_id = parsedData.TransactionId;
+                grPartsInfo.u_local_currency_code = parsedData.LocalCurrencyCode;
+                grPartsInfo.u_conversion_exchange_rate = parsedData.ConversionExchangeRate;
+                for (var k = 0; k < partsSelected.length; k++) {
+                    if (parsedData.PartInfoDetail[i].PartNumber == parts[k].order_id) {
+
+                        if (get_line_transactions.get(partsSelected[k].stg_sys_id)) { ////DFCT0012694 : added if condition
+                            grPartsInfo.u_order_line_staging_number = get_line_transactions.getUniqueValue();
+
+                        } ////DFCT0012694
+                    }
+                }
+                grPartsInfo.u_order_transaction_number = current.getUniqueValue();
+                grPartsInfo.insert();
+                for (var l = 0; l < parsedData.PartInfoDetail[i].ConditionTypeItem.length; l++) {
+                    var conditionTypePart = new GlideRecord('u_condition_type');
+                    var amountFieldsinfo = new global.CurrencyConversionToUSD().convertCurrencytoUSD(parsedData.PartInfoDetail[i].ConditionTypeItem[l].Amount, parsedData.ConversionExchangeRate, requestCurrencyCode, parsedData.LocalCurrencyCode); // DFCT0013213
+                    conditionTypePart.u_condition_type = parsedData.PartInfoDetail[i].ConditionTypeItem[l].ConditionType;
+                    conditionTypePart.u_description = parsedData.PartInfoDetail[i].ConditionTypeItem[l].Description;
+                    conditionTypePart.u_quantity = parsedData.PartInfoDetail[i].ConditionTypeItem[l].Quantity;
+                    conditionTypePart.u_amount = amountFieldsinfo.nonUSD_price;
+                    conditionTypePart.u_amount_usd = amountFieldsinfo.usd_price; // DFCT0013213 USD Amount added
+                    conditionTypePart.u_percent = parsedData.PartInfoDetail[i].ConditionTypeItem[l].Percent;
+                    conditionTypePart.u_part_info_id = grPartsInfo.getUniqueValue();
+                    conditionTypePart.insert();
+                } //hardroll STRY0188051 start
+                if (parsedData.PartInfoDetail[i].ReplacementPart != null) {
+                    //for(var prt = 0; prt < partsSelected.length; prt++){
+                    partQuantity = partsSelected[i].sysparm_quantity;
+                    //replacement indentified for the part
+                    var partReplacement = this.partReplacementIndetified(current, parsedData.PartInfoDetail[i].ReplacementPartDetail, parsedData, requestCurrencyCode, partQuantity);
+                    PartsInfoResponse.partReplacement = partReplacement;
+                    //}
+
+                } //hardroll STRY0188051 end 
+                /*Start - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+                PartsInfoResponse.PartServices = PartsandServicesforParts;
+                PartsInfoResponse.PartRecords = partsInfoRecords.push(grPartsInfo.sys_id);
+                /*Start - STRY0188053 - R2 CSR Eligibility per product - retrieving product sensitivity of a part from partinfo response when user search with parts*/
+                //STRY0188902:R2 GetPartInfo /HP Order Line transaction staging mapping and Layout
+
+                for (var part = 0; part < parts.length; part++) {
+                    this.logMessage("staging Selected parts order " + parts.length + " " + "Parts: " + parts[part].order_id + " --- " + "staging Selected parts from GNCatalog : " + parsedData.PartInfoDetail[part].PartNumber);
+                    //gs.info("staging Selected parts from GNCatalog : "+parsedData.PartInfoDetail[part].PartNumber);
+
+                }
+
+
+                for (var line = 0; line < partsSelected.length; line++) {
+                    //gs.info("staging PartInfoDetail[i].PartNumber: " + parsedData.PartInfoDetail[i].PartNumber + "-" + " parts[line].order_id: " + parts[line].order_id);
+                    if (parsedData.PartInfoDetail[i].PartNumber == partsSelected[line].order_id) {
+                        //gs.info("partsSelected[line].stg_sys_id: " + partsSelected[line].stg_sys_id);
+                        //gs.info("staging get_line_transactions.get(partsSelected[line].stg_sys_id): " + get_line_transactions.get(partsSelected[line].stg_sys_id));
+                        if (get_line_transactions.get(partsSelected[line].stg_sys_id)) { //DFCT0012694: added if condiiton
+                            grPartsInfo.u_order_line_staging_number = get_line_transactions.getUniqueValue();
+
+                            var get_line_transaction_staging = new GlideRecord('u_hp_order_line_transaction_staging');
+                            get_line_transaction_staging.get(get_line_transactions.getUniqueValue());
+                            var taedisplay = new CSDP_TAE_PartDisplay();
+                            var coreprice = taedisplay.retrieveCorePrice(get_line_transaction_staging); // getting the coreprice based on region					
+                            var hardware = new GlideRecord('cmdb_hardware_product_model');
+                            hardware.addQuery('model_number', get_line_transaction_staging.u_material);
+                            hardware.query();
+                            if (hardware.next()) {
+                                csrlevel = hardware.u_csr_level;
+                                oversized = hardware.getDisplayValue('u_oversized');
+                                overweight = hardware.getDisplayValue('u_overweight');
+                                a3 = hardware.getDisplayValue('u_is_a3');
+                                a4 = hardware.getDisplayValue('u_is_a4');
+                                hppk = hardware.getDisplayValue('u_is_hppk');
+                                graphics = hardware.getDisplayValue('u_is_graphics');
+
+                                //Start - STRY0285094
+                                //returnableFlag = hardware.getDisplayValue('u_defective_return_flag');
+                                //End - STRY0285094
+                                dangerousGoods = hardware.u_dangerous_goods_ind;
+
+                                //Start - STRY0285094
+                                //fetch user name of the user currently accessing the BOM page
+                                var sales_org = '';
+                                var defective_returnable_material_lifecycle = '';
+                                var currentUserSysID = gs.getUserID();
+                                //get the customer conact record of the above mentioned user to get their sales org value by dot walking through their account
+                                var contact = new GlideRecord('customer_contact');
+                                contact.addQuery('user_name', currentUserSysID);
+                                contact.query();
+                                if (contact.next()) {
+                                    sales_org = contact.account.u_hp_sales_org.name;
+                                }
+                                //fetch the record from material lifecycle table whose sales org is same as the above mentioned sales org and whose model number is same as the hardware record's model number
+                                var mc = new GlideRecord('u_part_orderability');
+                                mc.addQuery('u_model_number', hardware.model_number);
+                                mc.addQuery('u_sales_org', sales_org);
+                                mc.query();
+                                if (mc.next()) {
+                                    //fetch the returnable flag value for this record
+                                    returnableFlag = mc.u_returnable_flag;
+                                }
+                                //End - STRY0285094
+
+                            }
+
+                            //hardroll STRY0188051 start
+                            if (parsedData.PartInfoDetail[i].ReplacementPart != null) {
+                                get_line_transaction_staging.quantity = 0;
+                            } //hardroll STRY0188051 end
+                            /*START STRY0285075 - R2_Display part returnable attribute (True or False) in CSDP Portal*/
+                            get_line_transaction_staging.u_part_return_flag = grPartsInfo.u_returnable;
+                            get_line_transaction_staging.u_defective_returnable = grPartsInfo.u_returnable;
+                            get_line_transaction_staging.u_unused_returnable = 'true';
+                            /*END STRY0285075 - R2_Display part returnable attribute (True or False) in CSDP Portal*/
+                            get_line_transaction_staging.u_country_code = current.u_ship_to_location.u_country.iso3166_2;
+                            get_line_transaction_staging.u_sales_organization = current.account.u_hp_sales_org.name;
+                            get_line_transaction_staging.u_returnable_flag = returnableFlag;
+                            get_line_transaction_staging.u_csr_level = csrlevel;
+                            get_line_transaction_staging.u_oversized = oversized;
+                            get_line_transaction_staging.u_overweight = overweight;
+                            get_line_transaction_staging.u_dangerous_good = dangerousGoods;
+                            get_line_transaction_staging.u_a3 = a3;
+                            get_line_transaction_staging.u_a4 = a4;
+                            get_line_transaction_staging.u_hppk = hppk;
+                            get_line_transaction_staging.u_graphics = graphics;
+                            get_line_transaction_staging.u_parts_info_attribute = grPartsInfo.getUniqueValue();
+
+                            if (current.u_order_type == 'warranty' || current.u_order_type == 'PCF Warranty') {
+                                get_line_transaction_staging.u_service_offer_id = current.u_selected_service_offer_id.u_number;
+                                get_line_transaction_staging.u_default_service_offer_id = false;
+
+                            } else if (current.u_order_type == 'stocking' || current.u_order_type == 'trade') {
+                                get_line_transaction_staging.u_service_offer_id = current.u_default_service_offer_id.u_number;
+                                get_line_transaction_staging.u_default_service_offer_id = true;
+                            }
+                            var amount = 0.00;
+                            var percent1 = 0.00;
+                            var percent2 = 0.00;
+                            var batteryFee = 0.00; // STRY0291688
+                            var add;
+                            var ZF01 = 0.00; //STRY0198668 - contractual pricing
+                            var ZF05 = 0.00;
+                            var pricecond = 'false';
+                            var amount = '';
+                            var Region = get_line_transaction_staging.order_id.u_ship_to_location.u_country.u_region.region_name.toString();
+                            var conditionTypeValue = new GlideRecord('u_condition_type');
+                            conditionTypeValue.addQuery('u_part_info_id.u_number', grPartsInfo.u_number);
+                            conditionTypeValue.query();
+                            while (conditionTypeValue.next()) {
+                                if (conditionTypeValue.u_condition_type == 'ZF03') {
+                                    amount = amount + conditionTypeValue.u_amount;
+                                }
+                                if (conditionTypeValue.u_condition_type == 'Y91P') {
+                                    percent1 = percent1 + conditionTypeValue.u_percent;
+                                }
+                                if (conditionTypeValue.u_condition_type == 'Y73P') {
+                                    percent2 = percent2 + conditionTypeValue.u_percent;
+                                }
+                                if (conditionTypeValue.u_condition_type == 'ZF05') {
+                                    ZF05 = ZF05 + conditionTypeValue.u_amount;
+                                }
+
+                                if (conditionTypeValue.u_condition_type == 'ZF01') {
+                                    //start - STRY0198668 - added if condition for zf01
+                                    pricecond = 'true';
+                                    amount = conditionTypeValue.u_amount;
+                                    ZF01 = ZF01 + amount;
+                                    //end-STRY0198668 - added if condition for zf01
+
+                                }
+                                //Start:STRY0291688
+                                if (conditionTypeValue.u_condition_type == 'YR1A') {
+                                    batteryFee = batteryFee + conditionTypeValue.u_amount;
+
+                                }
+                                //End:STRY0291688
+                            }
+
+                            var nonDiscountIndicator = new global.RetrievePartDetails().icmNonDiscount(grPartsInfo.u_part_number);
+                            if (nonDiscountIndicator.ndiFlag == 'true') {
+                                //gs.info("nonDiscountIndicator" + grPartsInfo.u_part_number);
+                                add = 0.00;
+                            } else {
+                                add = percent1 + percent2;
+                            }
+                            var totamount = (amount * (add / 100)).toFixed(2);
+                            get_line_transaction_staging.u_batteryfee = batteryFee * get_line_transaction_staging.quantity; //STRY0291688
+                            if (pricecond == 'true' && ZF01 > 0) {
+                                //Start : STRY0326136
+                                if (current.u_order_type == 'warranty' || current.u_order_type == 'vmi_iw_claim' || current.u_order_type == 'vmi_trade_claim') { //STRY0202480,STRY0202478: Added check for VMI
+                                    get_line_transaction_staging.u_list_price = ZF01;
+                                    get_line_transaction_staging.u_core_charge = '';
+                                    get_line_transaction_staging.u_discount = 0;
+                                    get_line_transaction_staging.u_net_price = ZF01;
+                                }
+                                if (current.u_order_type == 'PCF Warranty' || current.u_order_type == 'stocking') {
+                                    get_line_transaction_staging.u_list_price = ZF01 * get_line_transaction_staging.quantity;
+                                    get_line_transaction_staging.u_core_charge = '';
+                                    get_line_transaction_staging.u_discount = 0;
+                                    get_line_transaction_staging.u_net_price = ZF01 * get_line_transaction_staging.quantity;
+                                }
+                                if (current.u_order_type == 'trade' && Region == 'AMS') {
+                                    get_line_transaction_staging.u_list_price = ZF01 * get_line_transaction_staging.quantity;
+                                    get_line_transaction_staging.u_core_charge = ZF05 * get_line_transaction_staging.quantity;
+                                    get_line_transaction_staging.u_discountt = 0;
+                                    get_line_transaction_staging.u_net_price = ZF01 * get_line_transaction_staging.quantity;
+
+                                }
+                                if (current.u_order_type == 'trade' && Region != 'AMS') {
+                                    get_line_transaction_staging.u_list_price = ZF01 * get_line_transaction_staging.quantity;
+                                    get_line_transaction_staging.u_core_charge = '';
+                                    get_line_transaction_staging.u_discount = 0;
+                                    get_line_transaction_staging.u_net_price = ZF01 * get_line_transaction_staging.quantity;
+
+                                }
+                            } else {
+
+                                if (current.u_order_type == 'warranty') {
+                                    get_line_transaction_staging.u_totaldiscount = 0;
+                                    get_line_transaction_staging.u_discount = add;
+                                    get_line_transaction_staging.u_core_charge = 0;
+                                    get_line_transaction_staging.u_net_price = parseFloat(amount).toFixed(2);
+                                    get_line_transaction_staging.u_list_price = parseFloat(amount).toFixed(2);
+                                }
+                                if (current.u_order_type == 'vmi_iw_claim' || current.u_order_type == 'vmi_trade_claim') { //STRY0202480,STRY0202478: Added check for VMI
+                                    get_line_transaction_staging.u_totaldiscount = totamount;
+                                    get_line_transaction_staging.u_discount = add;
+                                    get_line_transaction_staging.u_core_charge = 0;
+                                    get_line_transaction_staging.u_net_price = parseFloat(amount * (1 - (add / 100))).toFixed(2);
+                                    get_line_transaction_staging.u_list_price = parseFloat(amount).toFixed(2);
+                                }
+                                if (current.u_order_type == 'PCF Warranty' || current.u_order_type == 'stocking') {
+                                    get_line_transaction_staging.u_totaldiscount = totamount * get_line_transaction_staging.quantity;
+                                    get_line_transaction_staging.u_discount = add;
+                                    get_line_transaction_staging.u_core_charge = 0;
+                                    get_line_transaction_staging.u_net_price = get_line_transaction_staging.quantity * (parseFloat(amount * (1 - (add / 100))).toFixed(2));
+                                    get_line_transaction_staging.u_list_price = get_line_transaction_staging.quantity * (parseFloat(amount).toFixed(2));
+                                }
+                                if (current.u_order_type == 'trade') {
+                                    get_line_transaction_staging.u_core_charge = coreprice * get_line_transaction_staging.quantity;
+
+                                    if (coreprice == 0) {
+                                        get_line_transaction_staging.u_totaldiscount = totamount * get_line_transaction_staging.quantity;
+                                        get_line_transaction_staging.u_discount = add;
+                                        get_line_transaction_staging.u_net_price = get_line_transaction_staging.quantity * ((parseFloat(amount * (1 - (add / 100)))) + parseFloat(batteryFee)).toFixed(2); //STRY0291688
+                                        get_line_transaction_staging.u_list_price = get_line_transaction_staging.quantity * (parseFloat(amount).toFixed(2));
+                                    } else if (coreprice != 0) {
+                                        get_line_transaction_staging.u_totaldiscount = totamount * get_line_transaction_staging.quantity;
+                                        get_line_transaction_staging.u_discount = add;
+                                        get_line_transaction_staging.u_net_price = (get_line_transaction_staging.quantity * ((parseFloat(amount * (1 - (add / 100)))) + parseFloat(batteryFee)).toFixed(2)); //STRY0291688
+                                        get_line_transaction_staging.u_list_price = get_line_transaction_staging.quantity * (parseFloat(amount).toFixed(2));
+                                    } else if (coreprice != 0 && get_line_transaction_staging.u_trade_advanced_exchange_flag == false) {
+                                        get_line_transaction_staging.u_totaldiscount = totamount * get_line_transaction_staging.quantity;
+                                        get_line_transaction_staging.u_discount = add;
+                                        get_line_transaction_staging.u_net_price = (get_line_transaction_staging.quantity * ((parseFloat(amount * (1 - (add / 100)))) + parseFloat(batteryFee)).toFixed(2)); //STRY0291688
+                                        get_line_transaction_staging.u_list_price = get_line_transaction_staging.quantity * (parseFloat(amount).toFixed(2));
+                                    } else if (coreprice != 0 && get_line_transaction_staging.u_trade_advanced_exchange_flag == true) {
+                                        get_line_transaction_staging.u_totaldiscount = get_line_transaction_staging.quantity * ((amount - coreprice) * (add / 100));
+                                        get_line_transaction_staging.u_discount = (amount - coreprice) * (add / 100);
+                                        get_line_transaction_staging.u_net_price = (get_line_transaction_staging.quantity * ((parseFloat((amount - coreprice) * (1 - (add / 100)))) + parseFloat(batteryFee)).toFixed(2)); //STRY0291688
+                                        get_line_transaction_staging.u_list_price = get_line_transaction_staging.quantity * (parseFloat(amount).toFixed(2));
+                                    }
+
+                                }
+                            }
+                            //End: STRY0326136
+                            ///Start :CSDP_ DFCT0013070_SC_Currency for Check Republic Users is not displayed
+                            var currencyGR = new GlideRecord('fx_currency');
+                            currencyGR.addQuery('code', current.account.u_currency);
+                            currencyGR.addQuery('active', true);
+                            currencyGR.query();
+                            if (currencyGR.next()) {
+                                get_line_transaction_staging.u_part_currency = currencyGR.sys_id;
+                            } //End :CSDP_ DFCT0013070_SC_Currency for Check Republic Users is not displayed
+                            get_line_transaction_staging.update();
+                        } //DFCT0012694
+                    }
+                }
+                //R2 GetPartInfo /HP Order Line transaction staging mapping and Layout:STRY0188902
+            }
+        }
+        //START-STRY0291648_HS_Export & import Web Service Failures
+        else {
+
+            var fail = new WebServiceFailures();
+            fail.createFailure("getPartinfo", httpStatus, "", "", "", responseBody);
+            return res;
+        }
+        //END-STRY0291648_HS_Export & import Web Service Failures
+    } catch (e) {
+        gs.info("GET Parts GN Catalog Error : " + e + ": line number :" + e.lineNumber);
+
+
+    }
+    return PartsInfoResponse;
+},
